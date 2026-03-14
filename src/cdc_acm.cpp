@@ -97,7 +97,7 @@ driver *cdc_acm::factory::create(libusb_device_handle *handle,
 
   // ifc=1 (CDC Data) のカーネルドライバをデタッチ＆クレーム
   int rd1 = libusb_detach_kernel_driver(handle, 1);
-  log.i(__, "detach ifc=1 result: %d %s", rd1, libusb_error_name(rd1));
+  log.e(__, "detach ifc=1 result: %d %s", rd1, libusb_error_name(rd1));
   int r1 = libusb_claim_interface(handle, 1);
   if (r1 < 0) {
     log.e(__, "claim ifc=1 failed: %s", libusb_error_name(r1));

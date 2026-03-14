@@ -88,7 +88,8 @@ driver *cdc_acm::factory::create(libusb_device_handle *handle,
   log.i(__, "probing %s for %04x:%04x", "cdc_acm", did.vid, did.pid);
 
   // ifc=0 (CDC Control) のカーネルドライバをデタッチ＆クレーム
-  libusb_detach_kernel_driver(handle, 0);
+int rd0 = libusb_detach_kernel_driver(handle, 0);
+  log.e(__, "detach ifc=0 result: %d %s", rd0, libusb_error_name(rd0));
   int r0 = libusb_claim_interface(handle, 0);
   log.e(__, "claim ifc=0 result: %d %s", r0, libusb_error_name(r0));
   if (r0 < 0) {

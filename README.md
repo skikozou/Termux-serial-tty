@@ -1,3 +1,9 @@
+# Termux-serial-tty (CDC ACM fork)
+ 
+[MarkWllms/Termux-serial-tty](https://github.com/MarkWllms/Termux-serial-tty) のforkです。
+USB CDC ACMデバイス（iRobot Roomba 980など）への対応を追加しています。
+詳しくは [README+.md](README+.md)
+
 ## USBUART
  A cross-platform library for reading/wring data via USB-UART adapters
 

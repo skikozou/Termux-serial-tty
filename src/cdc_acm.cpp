@@ -8,17 +8,13 @@
 #include "usbuart.hpp"
 #include <endian.h>
 #include <libusb.h>
-
 namespace usbuart {
-
 // CDC ACM クラス定義 (USB CDC spec 1.1)
 static constexpr uint8_t CDC_SET_LINE_CODING = 0x20;
 static constexpr uint8_t CDC_SET_CONTROL_LINE_STATE = 0x22;
-
 static constexpr uint8_t CDC_REQTYPE_OUT = LIBUSB_REQUEST_TYPE_CLASS |
                                            LIBUSB_RECIPIENT_INTERFACE |
                                            LIBUSB_ENDPOINT_OUT;
-
 // SET_LINE_CODING のペイロード (7バイト, リトルエンディアン)
 struct __attribute__((packed)) cdc_line_coding {
   uint32_t dwDTERate;  // ボーレート
@@ -26,34 +22,24 @@ struct __attribute__((packed)) cdc_line_coding {
   uint8_t bParityType; // パリティ: 0=None, 1=Odd, 2=Even
   uint8_t bDataBits;   // データビット: 5,6,7,8
 };
-
 class cdc_acm : public generic {
 public:
   static const struct interface _ifc;
-
   void setbaudrate(baudrate_t baudrate) const throw(error_t) {
-    // CDC ACM はボーレートを SET_LINE_CODING で一括設定するため
-    // setup() 経由で処理される。単体呼び出しは何もしない。
     (void)baudrate;
   }
-
   void setup(const eia_tia_232_info &info) const throw(error_t) {
     set_line_coding(info);
     set_control_line_state(true);
     generic::setup(info);
   }
-
   void reset() const throw(error_t) {}
   void sendbreak() const throw(error_t) {}
-
   void read_callback(libusb_transfer *, size_t &pos) noexcept { pos = 0; }
-
   ~cdc_acm() noexcept {}
-
 private:
   inline cdc_acm(libusb_device_handle *d, uint8_t ifnum) throw(error_t)
       : generic(d, _ifc, ifnum) {}
-
   void set_line_coding(const eia_tia_232_info &info) const throw(error_t) {
     cdc_line_coding lc;
     lc.dwDTERate = htole32(info.baudrate);
@@ -62,89 +48,63 @@ private:
                      : (info.parity == parity_t::even) ? 2
                                                        : 0;
     lc.bDataBits = info.databits;
-
     int r = libusb_control_transfer(
-        dev, CDC_REQTYPE_OUT, CDC_SET_LINE_CODING, 0,
-        0, // wValue=0, wIndex=0 (CDC Control ifc)
+        dev, CDC_REQTYPE_OUT, CDC_SET_LINE_CODING, 0, 0,
         reinterpret_cast<unsigned char *>(&lc), sizeof(lc), timeout);
     if (r < 0) {
       log.e(__, "SET_LINE_CODING failed: %s", libusb_error_name(r));
       throw error_t::control_error;
     }
   }
-
   void set_control_line_state(bool dtr) const throw(error_t) {
     int r = libusb_control_transfer(dev, CDC_REQTYPE_OUT,
                                     CDC_SET_CONTROL_LINE_STATE,
-                                    dtr ? 0x01 : 0x00, // DTR on
-                                    0, // wIndex=0 (CDC Control ifc)
-                                    nullptr, 0, timeout);
+                                    dtr ? 0x01 : 0x00,
+                                    0, nullptr, 0, timeout);
     if (r < 0) {
       log.e(__, "SET_CONTROL_LINE_STATE failed: %s", libusb_error_name(r));
       throw error_t::control_error;
     }
   }
-
   static class factory : driver::factory {
     driver *create(libusb_device_handle *, uint8_t) const throw(error_t);
   } _factory;
 };
-
-// Roomba 980 の bulk エンドポイント (ifc=1, CDC Data)
-const struct interface cdc_acm::_ifc = {0x81, // ep_bulk_in
-                                        0x03, // ep_bulk_out
-                                        64};
-
+const struct interface cdc_acm::_ifc = {0x81, 0x03, 64};
 cdc_acm::factory cdc_acm::_factory;
-
 driver *cdc_acm::factory::create(libusb_device_handle *handle,
                                  uint8_t ifc) const throw(error_t) {
   static constexpr const uint32_t table[] = {
       devid32(0x27a6, 0x0002), // iRobot Roomba 980
   };
-
   device_id did = devid(handle);
   uint32_t id = devid32(did);
-  if (!id)
-    return nullptr;
-
+  if (!id) return nullptr;
   bool found = false;
   for (auto &&i : table) {
-    if ((found = (i == id)))
-      break;
+    if ((found = (i == id))) break;
   }
-  if (!found)
-    return nullptr;
-
+  if (!found) return nullptr;
   log.i(__, "probing %s for %04x:%04x", "cdc_acm", did.vid, did.pid);
 
   // ifc=0 (CDC Control) のカーネルドライバをデタッチ＆クレーム
-  if (libusb_kernel_driver_active(handle, 0) == 1) {
-    log.i(__, "detaching kernel driver on ifc 0");
-    int r = libusb_detach_kernel_driver(handle, 0);
-    if (r < 0) {
-      log.e(__, "detach kernel driver (ifc=0) failed: %s",
-            libusb_error_name(r));
-      throw error_t::interface_busy;
-    }
+  libusb_detach_kernel_driver(handle, 0); // エラー無視
+  int r0 = libusb_claim_interface(handle, 0);
+  if (r0 < 0) {
+    log.e(__, "claim ifc=0 failed: %s", libusb_error_name(r0));
+    throw error_t::interface_busy;
   }
-  libusb_claim_interface(handle, 0);
 
   // ifc=1 (CDC Data) のカーネルドライバをデタッチ＆クレーム
-  if (libusb_kernel_driver_active(handle, 1) == 1) {
-    log.i(__, "detaching kernel driver on ifc 1");
-    int r = libusb_detach_kernel_driver(handle, 1);
-    if (r < 0) {
-      log.e(__, "detach kernel driver (ifc=1) failed: %s",
-            libusb_error_name(r));
-      libusb_release_interface(handle, 0);
-      throw error_t::interface_busy;
-    }
+  libusb_detach_kernel_driver(handle, 1); // エラー無視
+  int r1 = libusb_claim_interface(handle, 1);
+  if (r1 < 0) {
+    log.e(__, "claim ifc=1 failed: %s", libusb_error_name(r1));
+    libusb_release_interface(handle, 0);
+    throw error_t::interface_busy;
   }
 
-  cdc_acm *drv = new cdc_acm(handle, 1); // ifc=1 (CDC Data) を使用
-  drv->claim_interface();
-  return drv;
+  // claim済みなので claim_interface() は呼ばない
+  return new cdc_acm(handle, 1);
 }
-
 } // namespace usbuart

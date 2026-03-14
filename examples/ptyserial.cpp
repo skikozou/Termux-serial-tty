@@ -20,130 +20,142 @@
  * <http://www.gnu.org/licenses/gpl-2.0.html>.
  */
 
+#include "usbuart.h"
+#include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <chrono>
-#include <signal.h>
-#include <unistd.h>
-#include <stdlib.h>
+#include <fcntl.h>
 #include <iostream>
 #include <pty.h>
-#include <fcntl.h>
+#include <signal.h>
+#include <stdlib.h>
 #include <string>
 #include <sys/wait.h>
-#include "usbuart.h"
+#include <unistd.h>
 
 static bool terminated = false;
 
-static void doexit(int signal) {
-	terminated = true;
-}
+static void doexit(int signal) { terminated = true; }
 
-void show_err(int err) {
-	fprintf(stderr,"err(%d)==%s\n", err, strerror(err));
-}
+void show_err(int err) { fprintf(stderr, "err(%d)==%s\n", err, strerror(err)); }
 using namespace usbuart;
 using namespace std::chrono;
 
 static inline bool is_good(int status) noexcept {
-	return status == status_t::alles_gute;
+  return status == status_t::alles_gute;
 }
 
 static inline bool is_usable(int status) noexcept {
-	return	status == (status_t::usb_dev_ok | status_t::read_pipe_ok)  ||
-			status == (status_t::usb_dev_ok | status_t::write_pipe_ok) ||
-			status ==  status_t::alles_gute;
+  return status == (status_t::usb_dev_ok | status_t::read_pipe_ok) ||
+         status == (status_t::usb_dev_ok | status_t::write_pipe_ok) ||
+         status == status_t::alles_gute;
 }
 
-int main(int argc, char** argv) {
-	channel chnl = bad_channel;
-	int master = -1;
+int main(int argc, char **argv) {
+  channel chnl = bad_channel;
+  int master = -1;
 
-	if( argc < 2 ) {
-		fprintf(stderr,"Usage: termux-usb -e '%s  <command> [command arguments]' <usb device address>\n",argv[0]);
-		return -1;
-	}
-	const char* usb_fd_arg_str = argv[argc-1];
-	int usb_dev_fd = -1;
-    try {
-        usb_dev_fd = std::stoi(usb_fd_arg_str);
-    } catch (const std::invalid_argument& ia) {
-        fprintf(stderr,"Error: Invalid USB file descriptor argument %s. Not a number.\n",usb_fd_arg_str);
-        return EXIT_FAILURE;
-    } catch (const std::out_of_range& oor) {
-        fprintf(stderr,"Error: USB file descriptor argument %s out of range.\n",usb_fd_arg_str);
-        return EXIT_FAILURE;
-    }
+  if (argc < 2) {
+    fprintf(stderr,
+            "Usage: termux-usb -e '%s  <command> [command arguments]' <usb "
+            "device address>\n",
+            argv[0]);
+    return -1;
+  }
+  const char *usb_fd_arg_str = argv[argc - 1];
+  int usb_dev_fd = -1;
+  try {
+    usb_dev_fd = std::stoi(usb_fd_arg_str);
+  } catch (const std::invalid_argument &ia) {
+    fprintf(stderr,
+            "Error: Invalid USB file descriptor argument %s. Not a number.\n",
+            usb_fd_arg_str);
+    return EXIT_FAILURE;
+  } catch (const std::out_of_range &oor) {
+    fprintf(stderr, "Error: USB file descriptor argument %s out of range.\n",
+            usb_fd_arg_str);
+    return EXIT_FAILURE;
+  }
 
-    if (usb_dev_fd < 0) { 
-        fprintf(stderr,"Error: Invalid USB file descriptor value parsed: %d (must be non-negative).\n",usb_dev_fd);
-        return EXIT_FAILURE;
-    }
-
+  if (usb_dev_fd < 0) {
+    fprintf(stderr,
+            "Error: Invalid USB file descriptor value parsed: %d (must be "
+            "non-negative).\n",
+            usb_dev_fd);
+    return EXIT_FAILURE;
+  }
 
   char ptyname[256];
   pid_t pid = forkpty(&master, ptyname, NULL, NULL);
   if (pid < 0) {
-	perror("Could not create pty");
-	return EXIT_FAILURE;
+    perror("Could not create pty");
+    return EXIT_FAILURE;
   }
-  if (pid == 0) {    	
-//child process
+  if (pid == 0) {
+    // child process
     close(master);
-    if (argc> 2) {
-      argv[argc-1] = NULL;
-      execvp(argv[1], const_cast<char *const *>(argv+1));
+    if (argc > 2) {
+      argv[argc - 1] = NULL;
+      execvp(argv[1], const_cast<char *const *>(argv + 1));
     }
     wait(NULL);
     exit(0);
   }
-// Parent process
-  fprintf(stderr, "PTY created: %s\n",ptyname);
+  // Parent process
+  fprintf(stderr, "PTY created: %s\n", ptyname);
+  int slave_fd = open(ptyname, O_RDWR | O_NOCTTY);
+  if (slave_fd < 0) {
+    perror("open slave pty");
+    kill(pid, SIGKILL);
+    return EXIT_FAILURE;
+  }
   chnl.fd_read = master;
   chnl.fd_write = master;
 
-  context::setloglevel(loglevel_t::info);
+  context::setloglevel(loglevel_t::debug);
 
   context ctx;
   int res, status = 0;
   res = ctx.attach(usb_dev_fd, 0, chnl, _115200_8N1r);
-  if( res ) {
-	fprintf(stderr,"Error %d attaching fd %x\n",
-			-res, usb_dev_fd);
-	kill(pid, SIGKILL);
-	return -res;
+  // close(slave_fd);
+  if (res) {
+    fprintf(stderr, "Error %d attaching fd %x\n", -res, usb_dev_fd);
+    kill(pid, SIGKILL);
+    return -res;
   }
 
+  signal(SIGINT, doexit);
+  signal(SIGQUIT, doexit);
+  signal(SIGCHLD, doexit);
 
-	signal(SIGINT, doexit);
-	signal(SIGQUIT, doexit);
-        signal(SIGCHLD,doexit);
+  int count_down = 10;
+  int timeout = 0;
 
-	int count_down = 10;
-	int timeout = 0;
+  while (!terminated && (res = ctx.loop(timeout)) >= -error_t::no_channel) {
+    if (!is_usable(status = ctx.status(chnl)))
+      break;
+    if (res == -error_t::no_channel || !is_good(status)) {
+      timeout = 100;
+      fprintf(stderr, "Channel error:%d. Status=%d.\n", res, status);
+      if (--count_down <= 0)
+        break;
+    }
+  }
+  signal(SIGINT, SIG_DFL);
+  signal(SIGQUIT, SIG_DFL);
+  signal(SIGCHLD, SIG_DFL);
+  kill(pid, SIGTERM);
+  close(slave_fd);
 
-	while(!terminated && (res=ctx.loop(timeout)) >= -error_t::no_channel) {
-		if( ! is_usable(status = ctx.status(chnl)) ) break;
-		if( res == -error_t::no_channel || ! is_good(status) ) {
-			timeout = 100;
-			fprintf(stderr,"Channel error:%d. Status=%d.\n",res,status);
-			if( --count_down <= 0 ) break;
-		}
-	}
-	signal(SIGINT, SIG_DFL);
-	signal(SIGQUIT, SIG_DFL);
-	signal(SIGCHLD, SIG_DFL);
-	kill(pid, SIGTERM);
+  fprintf(stderr, "USB status %d res %d\n", status, res);
+  ctx.close(chnl);
+  res = ctx.loop(1000);
+  if (res < -error_t::no_channel) {
+    fprintf(stderr, "Terminated with error %d\n", -res);
+  } else
+    res = 0;
 
-	fprintf(stderr,"USB status %d res %d\n", status, res);
-	ctx.close(chnl);
-	res = ctx.loop(1000);
-	if( res < -error_t::no_channel ) {
-		fprintf(stderr,"Terminated with error %d\n",-res);
-	} else
-		res = 0;
+  close(master);
 
-	close(master);
-
-	return res;
+  return res;
 }

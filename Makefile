@@ -54,6 +54,7 @@ OBJS :=																		\
   generic.o																	\
   log.o																		\
   pl2303.o																	\
+  cdc_acm.o                                                                 \
 
 
 CPPFLAGS += 																\
@@ -148,5 +149,5 @@ test: examples/test.o
 
 ptyserial: examples/ptyserial.o # $(TARGET-DIR)/libusbuart.so
 	@echo "    $(BOLD)ld$(NORM) " $(notdir $@)
-	$(LD) $(LDFLAGS)  -o $@ $^ -lusbuart -lusb-1.0 $(shell pkg-config --libs libusb-1.0) 
+	$(LD) $(LDFLAGS)  -o $@ $^ -L./bin -lusbuart -lusb-1.0 $(shell pkg-config --libs libusb-1.0) 
 
